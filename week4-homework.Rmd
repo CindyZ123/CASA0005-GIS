@@ -2,59 +2,116 @@
 title: "homework0-5"
 output: html_document
 date: "2022-11-01"
----
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
-
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
-```
-
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
-```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
-
+## import libs
 ```{r}
-library(readr)
-library(tidyverse)
 library(sf)
+library(tidyverse)
+library(dplyr)
+library(janitor)
+library(countrycode)
+library(here)
 library(tmap)
 library(tmaptools)
-library(janitor)
 ```
 
-
+## read data
 ```{r}
+GE <-
+  read_csv(
+    here::here(
+      "data",
+      "HDR21-22_Composite_indices_complete_time_series.csv"
+    ),
+    na = " ",
+  )
 
-Data <- read_csv("/Users/zhuhong/practical and homework/Geography Information System/CASA0005 practical and homework/Week 4/data.csv",
-                       locale = locale(encoding = "latin1"),
-                       na = "n/a")
-Data <- clean_names(Data)
+world <- st_read(
+  here(
+    'data',
+    'World_Countries_(Generalized)',
+    'World_Countries__Generalized_.shp'
+  )
+)
 ```
 
+## Add country code in GE
 ```{r}
-map <- st_read("/Users/zhuhong/practical and homework/Geography Information System/CASA0005 practical and homework/Week 4/World_Countries/World_Countries__Generalized_.shp")
-```
-link data
-```{r}
-linkdata <- map %>% 
+GE_new <- GE %>%
   clean_names() %>%
-  left_join(., 
-            Data,
-            by = c("country" = "country"))
+  select(iso3, country, gii_2019, gii_2010) %>% # select gender inequality index of 2010 and 2019
+  mutate(difference = gii_2019 - gii_2010) %>%
+  mutate(iso_code = countrycode(country, origin = 'country.name', destination = 'iso2c')
+         #        )%>%
+         # mutate(iso_code2=countrycode(iso3, origin ='iso3c', destination = 'iso2c')
+  )
+```
+## join GE(csv) to world(shp)
+
+```{r}
+join_GE <- world %>%
+  clean_names() %>%
+  left_join(.,
+            GE_new,
+            by = c('iso' = 'iso_code'))
+
 ```
 
+## Basic interactive map
+```{r}
+tmap_mode("view")
+breaks <- quantile(join_GE$difference, 
+                  probs = c(0, 0.25, 0.5, 0.75, 1), 
+                  na.rm = TRUE)
+tm_shape(join_GE) +tm_polygons("difference", breaks=breaks) 
+```
+
+## advanced interactive map
+```{r}
+library(leafpop)
+library(leaflet)
+  
+#remove the geometry for our pop up boxes to avoid
+popupDiff <-join_GE %>%
+  st_drop_geometry()%>%
+  dplyr::select(`difference`)%>%
+  popupTable()
+
+
+tmap_mode("view")
+
+# set the colour palettes using our previously defined breaks
+pal1 <- join_GE %>%
+  colorBin(palette = "YlOrRd", domain=.$`difference`, bins=breaks)
+
+pal1 <-colorBin(palette = "YlOrRd", domain=join_GE$`difference`, bins=breaks)
+
+map<- leaflet(join_GE) %>%
+  # add basemap options
+  addTiles(group = "OSM (default)") %>%
+  addProviderTiles(providers$Stamen.Toner, group = "Toner") %>%
+  addProviderTiles(providers$Stamen.TonerLite, group = "Toner Lite") %>%
+  addProviderTiles(providers$CartoDB.Positron, group = "CartoDB")%>%
+  
+  #add our polygons, linking to the tables we just made
+  addPolygons(color="white", 
+              weight = 2,
+              opacity = 1,
+              dashArray = "3",
+              popup = popupDiff,
+              fillOpacity = 0.7,
+              fillColor = ~pal1(`difference`),
+              group = "difference")%>%
+  # add a legend
+  addLegend(pal = pal1, values = ~`difference`, group = c("difference"), 
+            position ="bottomleft", title = "Gender Inequality Difference between 2011 and 2019") %>%
+  # specify layers control
+  addLayersControl(
+    baseGroups = c("OSM (default)", "Toner", "Toner Lite", "CartoDB"),
+    overlayGroups = c("Difference"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
+
+# plot the map
+map
+```
